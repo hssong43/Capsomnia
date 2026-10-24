@@ -53,6 +53,47 @@ final class HIDCapsLockMonitor {
     var isActive: Bool { state == .active && !devices.isEmpty }
     var isPressed: Bool { isActive && tracker.isPressed }
 
+    private var capsLockLEDOutputs: [IOHIDElement] {
+        guard let manager, let keyboards = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> else { return [] }
+        return keyboards.flatMap { device in
+            let matching = [kIOHIDElementUsagePageKey: 8, kIOHIDElementUsageKey: 2] as CFDictionary
+            let elements = IOHIDDeviceCopyMatchingElements(device, matching, 0) as? [IOHIDElement] ?? []
+            return elements.filter { IOHIDElementGetType($0) == kIOHIDElementTypeOutput }
+        }
+    }
+
+    var capsLockLEDReportedState: Bool? {
+        let elements = capsLockLEDOutputs
+        guard !elements.isEmpty else { return nil }
+        var states: Set<Bool> = []
+        for element in elements {
+            let placeholder = IOHIDValueCreateWithIntegerValue(kCFAllocatorDefault, element, 0, 0)
+            var value = Unmanaged.passUnretained(placeholder)
+            guard IOHIDDeviceGetValue(IOHIDElementGetDevice(element), element, &value) == kIOReturnSuccess else {
+                return nil
+            }
+            states.insert(IOHIDValueGetIntegerValue(value.takeUnretainedValue()) != 0)
+        }
+        return states.count == 1 ? states.first : nil
+    }
+
+    func setCapsLockLED(_ target: Bool) -> CapsLockToggleResult {
+        let elements = capsLockLEDOutputs
+        guard !elements.isEmpty else { return .unavailable }
+        var succeeded = true
+        for element in elements {
+            let value = IOHIDValueCreateWithIntegerValue(
+                kCFAllocatorDefault, element, mach_absolute_time(), target ? 1 : 0
+            )
+            if IOHIDDeviceSetValue(IOHIDElementGetDevice(element), element, value) != kIOReturnSuccess {
+                succeeded = false
+            }
+        }
+        guard succeeded else { return .writeFailed(target: target) }
+        let reported = capsLockLEDReportedState
+        return reported == target ? .changed(to: target) : .verificationFailed(target: target, actual: reported)
+    }
+
     deinit { stop() }
 
     @discardableResult

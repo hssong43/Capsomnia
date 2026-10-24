@@ -82,11 +82,10 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
         },
         setLED: { [weak self] target, completion in
             guard let self else { completion(.unavailable); return }
-            self.capsLockToggleCoordinator.requestSet(target) { [weak self] result in
-                self?.handleCapsLockToggleResult(result, source: "led_sync")
-                completion(result)
-                self?.refreshSettingsHeaderStatus()
-            }
+            let result = self.hidCapsLockMonitor.setCapsLockLED(target)
+            self.handleCapsLockToggleResult(result, source: "led_output")
+            completion(result)
+            self.refreshSettingsHeaderStatus()
         }
     )
     private lazy var hidCapsLockMonitor: HIDCapsLockMonitor = {
@@ -102,6 +101,7 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
         filter.onCapsLockChange = { [weak self] in
             // The tap also sees programmatic changes. Use it as a prompt to
             // read the hardware, not as evidence of a user's ON/OFF intent.
+            self?.capsLockHold.invalidateLED()
             self?.refreshAfterCapsLockEvent()
         }
         return filter
@@ -185,6 +185,11 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         controlServer?.stop()
         capsLockHold.cancelPress()
+        if shouldRestoreSleepOnTerminate {
+            let modifierResult = SystemCapsLockController.set(false)
+            let ledResult = hidCapsLockMonitor.setCapsLockLED(false)
+            log("terminate modifier_off=\(modifierResult) led_off=\(ledResult)")
+        }
         hidCapsLockMonitor.stop()
         dedicatedCapsLockFilter.stop()
         secureInputFocusMonitor.stop()
@@ -209,8 +214,6 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard shouldRestoreSleepOnTerminate else { return }
 
         Preferences.secureInputCapsLockOverrideActive = false
-        let ledResult = SystemCapsLockController.set(false)
-        log("terminate led_off result=\(ledResult)")
         let result = runHelper("off")
         log("terminate restore_off helper_status=\(result.status) stdout=\(result.stdout) stderr=\(result.stderr)")
     }
@@ -253,6 +256,7 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
 
+        capsLockHold.invalidateLED()
         refreshAfterCapsLockEvent()
     }
 
@@ -309,6 +313,7 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func handleObservedCapsLockChange() {
+        capsLockHold.invalidateLED()
         refreshAfterCapsLockEvent()
     }
 
@@ -940,8 +945,8 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
             _ = syncSecureInputCapsLockOverride(physicalCapsLockOn: physical, reason: reason)
         }
         capsLockHold.synchronizeLED(
-            physical: capsLockStateReader.currentState(), confirmedAwake: lastConfirmedSleepState, pressed: hidCapsLockMonitor.isPressed,
-            secureOverride: secureInputCapsLockOverrideActive, now: HIDCapsLockMonitor.uptime
+            physical: hidCapsLockMonitor.capsLockLEDReportedState, confirmedAwake: lastConfirmedSleepState, pressed: hidCapsLockMonitor.isPressed,
+            now: HIDCapsLockMonitor.uptime
         )
         refreshStatus(capsLockOn: lastConfirmedSleepState ?? requested)
     }
@@ -1379,8 +1384,8 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func refreshSettingsHeaderStatus() {
-        let physical = capsLockStateReader.currentState()
-        let ledTarget = secureInputCapsLockOverrideActive ? false : lastConfirmedSleepState
+        let physical = hidCapsLockMonitor.capsLockLEDReportedState
+        let ledTarget = lastConfirmedSleepState
         let ledMismatch = !hidCapsLockMonitor.isPressed && physical != ledTarget
         settingsHeaderStatus = SettingsHeaderStatus.resolve(
             confirmed: lastConfirmedSleepState,
@@ -1401,8 +1406,8 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func refreshStatus(capsLockOn: Bool) {
-        let ledTarget = secureInputCapsLockOverrideActive ? false : lastConfirmedSleepState
-        let ledReady = hidCapsLockMonitor.isPressed || capsLockStateReader.currentState() == ledTarget
+        let ledTarget = lastConfirmedSleepState
+        let ledReady = hidCapsLockMonitor.isPressed || hidCapsLockMonitor.capsLockLEDReportedState == ledTarget
         if failedSleepState == nil, !dedicatedModeError, hidCapsLockMonitor.isActive, ledReady {
             updateStatus(capsLockOn: capsLockOn)
         } else {
@@ -1437,7 +1442,9 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.dedicatedCapsLockFilter.stop()
                 self?.secureInputFocusMonitor.stop()
                 Preferences.secureInputCapsLockOverrideActive = false
-                let ledResult = SystemCapsLockController.set(false)
+                let modifierResult = SystemCapsLockController.set(false)
+                let ledResult = self?.hidCapsLockMonitor.setCapsLockLED(false)
+                self?.log("signal=\(signalNumber) modifier_off=\(modifierResult)")
                 self?.log("signal=\(signalNumber) led_off result=\(ledResult)")
                 let result = self?.runHelper("off")
                 self?.log(
@@ -1617,6 +1624,7 @@ extension Capsomnia {
             "last_hold_seconds": capsLockHold.lastHoldDuration.map(JSONValue.number) ?? .null,
             "led_sync_in_flight": .bool(capsLockHold.isSynchronizingLED),
             "caps_lock_physical": physicalCapsLock.map(JSONValue.bool) ?? .null,
+            "caps_lock_led_reported": hidCapsLockMonitor.capsLockLEDReportedState.map(JSONValue.bool) ?? .null,
             "secure_input_caps_lock_override": .bool(secureInputCapsLockOverrideActive),
             "sleep_disabled": SleepStateReader.isDisabled().map(JSONValue.bool) ?? .null,
             "sleep_requested": .bool(sleepRequested),
@@ -1722,7 +1730,7 @@ extension Capsomnia {
         if let sleepDisabled, sleepDisabled != currentCapsLockState {
             issues.append(.string("Requested awake mode and actual sleep prevention are not synchronized."))
         }
-        if !hidCapsLockMonitor.isPressed, capsLock != (secureInputCapsLockOverrideActive ? false : sleepDisabled) {
+        if !hidCapsLockMonitor.isPressed, hidCapsLockMonitor.capsLockLEDReportedState != sleepDisabled {
             issues.append(.string("Caps Lock LED is not synchronized with awake mode."))
         }
         if dedicatedModeError { issues.append(.string("Capitalization prevention is unavailable. Check Accessibility permission.")) }

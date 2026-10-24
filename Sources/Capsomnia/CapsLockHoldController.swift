@@ -12,6 +12,8 @@ final class CapsLockHoldController {
     private var awakeAtPress = false
     private var didToggle = false
     private var nextLEDAttemptAt: TimeInterval = 0
+    private var ledRevision: UInt64 = 0
+    private var ledNeedsWrite = true
     private(set) var lastHoldDuration: TimeInterval?
 
     init(initialAwake: Bool, onRequest: @escaping (Bool) -> Void, setLED: @escaping SetLED) {
@@ -30,6 +32,7 @@ final class CapsLockHoldController {
         } else {
             evaluateHold(now: now)
             cancelPress()
+            invalidateLED()
         }
     }
 
@@ -54,7 +57,7 @@ final class CapsLockHoldController {
         if !preservePress { cancelPress() }
         requestedAwake = awake
         requestRevision &+= 1
-        nextLEDAttemptAt = 0
+        invalidateLED()
     }
 
     func completeRequest(_ awake: Bool, revision: UInt64) -> Bool {
@@ -63,21 +66,23 @@ final class CapsLockHoldController {
         return true
     }
 
-    func synchronizeLED(physical: Bool?, confirmedAwake: Bool?, pressed: Bool, secureOverride: Bool, now: TimeInterval) {
-        let target: Bool
-        if secureOverride {
-            target = false
-        } else if let confirmedAwake {
-            target = confirmedAwake
-        } else {
-            return
-        }
-        guard !pressed, !isSynchronizingLED, physical != target, now >= nextLEDAttemptAt else { return }
+    func invalidateLED() {
+        ledRevision &+= 1
+        ledNeedsWrite = true
+        nextLEDAttemptAt = 0
+    }
+
+    func synchronizeLED(physical: Bool?, confirmedAwake: Bool?, pressed: Bool, now: TimeInterval) {
+        guard let target = confirmedAwake else { return }
+        guard !pressed, !isSynchronizingLED, ledNeedsWrite || physical != target, now >= nextLEDAttemptAt else { return }
         isSynchronizingLED = true
         nextLEDAttemptAt = now + 1
+        let revision = ledRevision
         // A native input-source transition or failed LED write cannot change power intent.
-        setLED(target) { [weak self] _ in
-            self?.isSynchronizingLED = false
+        setLED(target) { [weak self] result in
+            guard let self else { return }
+            self.isSynchronizingLED = false
+            if result == .changed(to: target), self.ledRevision == revision { self.ledNeedsWrite = false }
         }
     }
 }
