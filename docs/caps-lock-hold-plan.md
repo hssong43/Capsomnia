@@ -29,3 +29,9 @@ Caps Lock으로 한영을 전환하는 환경에서 잠자기 방지가 짧은 �
 - 독립 리뷰에서 복원 중 다음 HID 입력이 유실되는 경합 1건 발견. 지연 완료 회귀 3개를 추가해 RED(7개 assertion 실패) → GREEN으로 보완했다.
 - 최종 `swift test`: 192개, 실물 하드웨어 테스트 2개 skipped, 실패 0.
 - 실제 설치/권한 및 물리 키 입력 확인은 적용 후 별도로 기록한다.
+
+## 설치 검증
+
+- 이전 앱과 설정은 저장소 밖 작업 폴더에 백업했다. 설치 앱을 교체하고 기존 로그인 LaunchAgent로 재실행했다. helper와 sudoers는 변경하지 않았다.
+- 실제 앱 진단: `healthy=true`, `caps_lock_hold_ready=true`, `caps_lock_off_hold_seconds=0.8`. 접근성 필터와 물리 키 모니터가 모두 active다.
+- 기존 사용자 설정을 유지했다. 실제 짧은 한영 입력/길게 OFF 및 보안 입력·wake·덮개 실물 시험은 사용자 확인 전까지 미실행으로 구분한다.
