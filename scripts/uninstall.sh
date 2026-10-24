@@ -15,6 +15,29 @@ SUDOERS_PATH="/etc/sudoers.d/capsomnia"
 launchctl bootout "gui/$(id -u)" "$LAUNCH_AGENT" 2>/dev/null || true
 launchctl bootout "gui/$(id -u)" "$SYSTEM_LAUNCH_AGENT" 2>/dev/null || true
 /usr/bin/pkill -x "$APP_NAME" 2>/dev/null || true
+for attempt in {1..50}; do
+    /usr/bin/pgrep -x "$APP_NAME" >/dev/null || break
+    /bin/sleep 0.1
+done
+if /usr/bin/pgrep -x "$APP_NAME" >/dev/null; then
+    echo "Capsomnia is still running; uninstall stopped and its backup was preserved." >&2
+    exit 1
+fi
+
+# Keep the app and private backup available if keyboard recovery fails.
+for installed_app in "$APP_BUNDLE" "$SYSTEM_APP_BUNDLE"; do
+    if [[ -x "$installed_app/Contents/MacOS/$APP_NAME" ]]; then
+        "$installed_app/Contents/MacOS/$APP_NAME" --restore-native-caps-lock || {
+            echo "Could not restore the Caps Lock key mapping; uninstall stopped." >&2
+            exit 1
+        }
+        break
+    fi
+done
+if [[ -e "$LEGACY_INSTALL_DIR/native-caps-mapping.json" || -L "$LEGACY_INSTALL_DIR/native-caps-mapping.json" ]]; then
+    echo "The Caps Lock mapping backup still needs recovery; uninstall stopped." >&2
+    exit 1
+fi
 
 sudo "$HELPER_PATH" off 2>/dev/null || sudo /usr/bin/pmset -a disablesleep 0 2>/dev/null || true
 # Restore the exact setting captured when Capsomnia first hid the indicator.

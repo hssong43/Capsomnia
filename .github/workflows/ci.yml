@@ -38,6 +38,8 @@ jobs:
         run: swift build -c release
       - name: Run test suite
         run: swift test
+      - name: Verify supervisor keyboard recovery
+        run: zsh Tests/supervisor-lifecycle.test.sh
       - name: Verify native privileged helper
         run: |
           file .build/release/capsomnia-pmset | grep -q 'Mach-O'
@@ -51,6 +53,7 @@ jobs:
       - name: Check shell scripts
         run: |
           zsh -n scripts/build-app.sh
+          zsh -n scripts/run-capsomnia.sh
           zsh -n scripts/build-pkg.sh
           zsh -n scripts/install.sh
           zsh -n scripts/notarize-pkg.sh
