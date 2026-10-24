@@ -1389,7 +1389,8 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let ledMismatch = !hidCapsLockMonitor.isPressed && physical != ledTarget
         settingsHeaderStatus = SettingsHeaderStatus.resolve(
             confirmed: lastConfirmedSleepState,
-            hasError: dedicatedModeError || !hidCapsLockMonitor.isActive || failedSleepState != nil || ledMismatch,
+            hasError: dedicatedModeError || !hidCapsLockMonitor.isActive || failedSleepState != nil
+                || ledMismatch || capsLockHold.ledWriteFailed,
             changing: isControlMutationInFlight || isAutoOffToggleInFlight,
             previous: settingsHeaderStatus
         )
@@ -1407,7 +1408,8 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func refreshStatus(capsLockOn: Bool) {
         let ledTarget = lastConfirmedSleepState
-        let ledReady = hidCapsLockMonitor.isPressed || hidCapsLockMonitor.capsLockLEDReportedState == ledTarget
+        let ledReady = !capsLockHold.ledWriteFailed
+            && (hidCapsLockMonitor.isPressed || hidCapsLockMonitor.capsLockLEDReportedState == ledTarget)
         if failedSleepState == nil, !dedicatedModeError, hidCapsLockMonitor.isActive, ledReady {
             updateStatus(capsLockOn: capsLockOn)
         } else {
@@ -1623,6 +1625,7 @@ extension Capsomnia {
             "hold_mode": .string("symmetric"),
             "last_hold_seconds": capsLockHold.lastHoldDuration.map(JSONValue.number) ?? .null,
             "led_sync_in_flight": .bool(capsLockHold.isSynchronizingLED),
+            "led_output_error": .bool(capsLockHold.ledWriteFailed),
             "caps_lock_physical": physicalCapsLock.map(JSONValue.bool) ?? .null,
             "caps_lock_led_reported": hidCapsLockMonitor.capsLockLEDReportedState.map(JSONValue.bool) ?? .null,
             "secure_input_caps_lock_override": .bool(secureInputCapsLockOverrideActive),
@@ -1733,6 +1736,7 @@ extension Capsomnia {
         if !hidCapsLockMonitor.isPressed, hidCapsLockMonitor.capsLockLEDReportedState != sleepDisabled {
             issues.append(.string("Caps Lock LED is not synchronized with awake mode."))
         }
+        if capsLockHold.ledWriteFailed { issues.append(.string("Caps Lock LED output failed. Retrying the hardware report.")) }
         if dedicatedModeError { issues.append(.string("Capitalization prevention is unavailable. Check Accessibility permission.")) }
         if !hidCapsLockMonitor.isActive {
             issues.append(.string("Long-press detection is unavailable. Check Input Monitoring permission and keyboard connection."))

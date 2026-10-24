@@ -218,4 +218,17 @@ final class CapsLockHoldControllerTests: XCTestCase {
         XCTAssertEqual(leds, [true, true])
         XCTAssertTrue(controller.requestedAwake)
     }
+    func testFailedForcedWriteWithMatchingCacheRemainsAnErrorUntilSuccessfulOutput() {
+        var attempts = 0
+        let controller = CapsLockHoldController(initialAwake: false, onRequest: { _ in }) {
+            target, completion in
+            attempts += 1
+            completion(attempts == 1 ? .writeFailed(target: target) : .changed(to: target))
+        }
+        controller.synchronizeLED(physical: false, confirmedAwake: false, pressed: false, now: 0)
+        XCTAssertTrue(controller.ledWriteFailed)
+        controller.synchronizeLED(physical: false, confirmedAwake: false, pressed: false, now: 1)
+        XCTAssertEqual(attempts, 2)
+        XCTAssertFalse(controller.ledWriteFailed)
+    }
 }

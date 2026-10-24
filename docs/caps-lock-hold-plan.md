@@ -25,8 +25,10 @@ Caps Lock을 짧게 누르면 한영만 전환하고 잠자기 방지 ON/OFF를 
 - Secure Event Input에서는 기존 modifier OFF 보호를 유지한다. LED output은 modifier를 바꾸지 않으므로 실제 전원 상태로 따로 표시한다. 실물 암호 입력 동작 검증은 별도로 구분한다.
 - 실제 키보드·한영 입력·wake·덮개 검증은 단위 테스트로 증명하지 못하며 확인 여부를 구분한다. 공식 업데이트로 개인 수정이 덮어써질 수 있다.
 
-- 최종 자동 검증: `swift test` 202개, 실물 하드웨어 테스트 2개 skipped, 실패 0. 설치/사용자 실물 확인은 아직 대기.
+- 최종 자동 검증: `swift test` 203개, 실물 하드웨어 테스트 2개 skipped, 실패 0. 설치/사용자 실물 확인은 아직 대기.
 
 - 독립 검토의 helper 실패 시 LED 기준/오래된 CLI·자동 OFF 완료 경합 2건은 추가 회귀 RED(7개 assertion 실패) 후 GREEN으로 해결했다.
 
 - MacBook Pro 내장 키보드의 LED output 직접 OFF 시험은 사용자가 실제 꺼짐을 확인했다. 새 출력 경로 적용 후 전체 단/장 입력과 불빛은 재확인한다.
+
+- 직접 LED 강제 출력 실패가 캐시 일치로 숨지 않도록 current-generation 오류를 UI/doctor에 유지하는 회귀를 RED→GREEN으로 검증했다.

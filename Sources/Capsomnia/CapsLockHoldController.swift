@@ -6,6 +6,7 @@ final class CapsLockHoldController {
     private(set) var requestedAwake: Bool
     private(set) var requestRevision: UInt64 = 0
     private(set) var isSynchronizingLED = false
+    private(set) var ledWriteFailed = false
     private let onRequest: (Bool) -> Void
     private let setLED: SetLED
     private var pressedAt: TimeInterval?
@@ -82,7 +83,10 @@ final class CapsLockHoldController {
         setLED(target) { [weak self] result in
             guard let self else { return }
             self.isSynchronizingLED = false
-            if result == .changed(to: target), self.ledRevision == revision { self.ledNeedsWrite = false }
+            if self.ledRevision == revision {
+                self.ledWriteFailed = result != .changed(to: target)
+                self.ledNeedsWrite = self.ledWriteFailed
+            }
         }
     }
 }
