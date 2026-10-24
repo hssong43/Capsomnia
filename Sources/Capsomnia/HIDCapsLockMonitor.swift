@@ -33,6 +33,12 @@ struct HIDCapsLockPressTracker {
 /// Optional, non-exclusive observation of Caps Lock key input. It never writes
 /// keyboard state or consumes an event. Long-press timing needs Input Monitoring.
 final class HIDCapsLockMonitor {
+    private static let secondsPerTick: Double = {
+        var timebase = mach_timebase_info_data_t()
+        mach_timebase_info(&timebase)
+        return Double(timebase.numer) / Double(timebase.denom) / 1_000_000_000
+    }()
+    static var uptime: TimeInterval { Double(mach_absolute_time()) * secondsPerTick }
     enum State {
         case inactive, active, permissionRequired, unavailable
     }
@@ -42,6 +48,7 @@ final class HIDCapsLockMonitor {
     private var manager: IOHIDManager?
     private var tracker = HIDCapsLockPressTracker()
     private var devices: Set<UInt64> = []
+    private(set) var lastEventTime: TimeInterval = 0
 
     var isActive: Bool { state == .active && !devices.isEmpty }
     var isPressed: Bool { isActive && tracker.isPressed }
@@ -132,6 +139,8 @@ final class HIDCapsLockMonitor {
             usage: IOHIDElementGetUsage(element),
             value: IOHIDValueGetIntegerValue(value)
         ) {
+            let timestamp = Double(IOHIDValueGetTimeStamp(value)) * Self.secondsPerTick
+            lastEventTime = timestamp > 0 ? min(timestamp, Self.uptime) : Self.uptime
             onChange?()
         }
     }
