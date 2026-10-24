@@ -22,6 +22,8 @@
 
 Current version: `4.3.0`
 
+This personal fork uses the MacBook's internal Caps key for two separate actions: a short release switches ABC/Korean input; holding for 0.8 seconds toggles keep-awake. Native uppercase Caps Lock is disabled while the app runs, and its lamp represents confirmed keep-awake state. The existing key mapping is backed up and restored on exit or crash. See [the Korean usage notes](README.ko.md) and [implementation plan](docs/caps-lock-hold-plan.md) for prerequisites and verification limits. The upstream release download below does not include this modification.
+
 [日本語 README](README.ja.md) · [简体中文 README](README.zh-Hans.md) · [한국어 README](README.ko.md)
 
 Capsomnia is a small macOS menu bar app that turns Caps Lock into a physical keep-awake switch for closed-lid MacBook work.

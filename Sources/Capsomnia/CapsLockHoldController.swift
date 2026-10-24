@@ -8,18 +8,21 @@ final class CapsLockHoldController {
     private(set) var isSynchronizingLED = false
     private(set) var ledWriteFailed = false
     private let onRequest: (Bool) -> Void
+    private let onShortPress: () -> Void
     private let setLED: SetLED
     private var pressedAt: TimeInterval?
     private var awakeAtPress = false
     private var didToggle = false
+    private var holdCancelled = false
     private var nextLEDAttemptAt: TimeInterval = 0
     private var ledRevision: UInt64 = 0
     private var ledNeedsWrite = true
     private(set) var lastHoldDuration: TimeInterval?
 
-    init(initialAwake: Bool, onRequest: @escaping (Bool) -> Void, setLED: @escaping SetLED) {
+    init(initialAwake: Bool, onRequest: @escaping (Bool) -> Void, onShortPress: @escaping () -> Void = {}, setLED: @escaping SetLED) {
         requestedAwake = initialAwake
         self.onRequest = onRequest
+        self.onShortPress = onShortPress
         self.setLED = setLED
     }
 
@@ -29,11 +32,15 @@ final class CapsLockHoldController {
                 pressedAt = now
                 awakeAtPress = requestedAwake
                 didToggle = false
+                holdCancelled = false
             }
         } else {
+            let hadPress = pressedAt != nil
             evaluateHold(now: now)
+            let shortPress = hadPress && !didToggle && now - (pressedAt ?? now) < Self.minimumDuration
             cancelPress()
             invalidateLED()
+            if shortPress { onShortPress() }
         }
     }
 
@@ -42,7 +49,7 @@ final class CapsLockHoldController {
     }
 
     private func evaluateHold(now: TimeInterval) {
-        guard let pressedAt, !didToggle, now - pressedAt >= Self.minimumDuration else { return }
+        guard let pressedAt, !didToggle, !holdCancelled, now - pressedAt >= Self.minimumDuration else { return }
         didToggle = true
         lastHoldDuration = now - pressedAt
         setRequested(!awakeAtPress, preservePress: true)
@@ -52,10 +59,13 @@ final class CapsLockHoldController {
     func cancelPress() {
         pressedAt = nil
         didToggle = false
+        holdCancelled = false
     }
 
+    func cancelHold() { holdCancelled = true }
+
     func setRequested(_ awake: Bool, preservePress: Bool = false) {
-        if !preservePress { cancelPress() }
+        if !preservePress { cancelHold() }
         requestedAwake = awake
         requestRevision &+= 1
         invalidateLED()

@@ -5,7 +5,6 @@ APP_NAME="Capsomnia"
 LABEL="com.github.fuji-mak.capsomnia"
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_BUNDLE="$HOME/Applications/$APP_NAME.app"
-LEGACY_INSTALL_DIR="$HOME/Library/Application Support/$APP_NAME"
 LOG_DIR="$HOME/Library/Logs/$APP_NAME"
 LAUNCH_AGENT="$HOME/Library/LaunchAgents/$LABEL.plist"
 HELPER_PATH="/Library/PrivilegedHelperTools/capsomnia-pmset"
@@ -28,14 +27,21 @@ trap cleanup EXIT
 
 mkdir -p "$HOME/Applications" "$LOG_DIR" "$HOME/Library/LaunchAgents"
 
-launchctl bootout "gui/$(id -u)" "$LAUNCH_AGENT" 2>/dev/null || true
-/usr/bin/pkill -x "$APP_NAME" 2>/dev/null || true
-
 cd "$ROOT_DIR"
 BUILT_APP="$("$ROOT_DIR/scripts/build-app.sh" "$build_tmp/$APP_NAME.app")"
+launchctl bootout "gui/$(id -u)" "$LAUNCH_AGENT" 2>/dev/null || true
+/usr/bin/pkill -x "$APP_NAME" 2>/dev/null || true
+for attempt in {1..50}; do
+  /usr/bin/pgrep -x "$APP_NAME" >/dev/null || break
+  /bin/sleep 0.1
+done
+if /usr/bin/pgrep -x "$APP_NAME" >/dev/null; then
+  echo "Capsomnia is still running; the existing app and backup were preserved." >&2
+  exit 1
+fi
+"$BUILT_APP/Contents/MacOS/$APP_NAME" --restore-native-caps-lock
 /bin/rm -rf "$APP_BUNDLE"
 /usr/bin/ditto "$BUILT_APP" "$APP_BUNDLE"
-/bin/rm -rf "$LEGACY_INSTALL_DIR"
 
 sudo /bin/mkdir -p "$(dirname "$HELPER_PATH")" "$(dirname "$SUDOERS_PATH")"
 sudo /usr/sbin/chown root:wheel "$(dirname "$HELPER_PATH")" "$(dirname "$SUDOERS_PATH")"
@@ -68,7 +74,7 @@ cat > "$LAUNCH_AGENT" <<EOF
 
   <key>ProgramArguments</key>
   <array>
-    <string>$APP_BUNDLE/Contents/MacOS/$APP_NAME</string>
+    <string>$APP_BUNDLE/Contents/Resources/run-capsomnia.sh</string>
   </array>
 
   <key>RunAtLoad</key>

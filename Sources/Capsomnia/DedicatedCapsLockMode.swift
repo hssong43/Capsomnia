@@ -4,6 +4,9 @@ import Foundation
 
 enum DedicatedCapsLockEventPolicy {
     static let capsLockKeyCode: Int64 = 57
+    static func shouldSuppressOwnedKey(eventType: CGEventType, keyCode: Int64) -> Bool {
+        keyCode == 79 && (eventType == .keyDown || eventType == .keyUp)
+    }
 
     static func sanitizedFlags(_ flags: CGEventFlags) -> CGEventFlags {
         var sanitized = flags
@@ -34,6 +37,8 @@ enum AccessibilityPermission {
 
 final class DedicatedCapsLockFilter {
     var onCapsLockChange: (() -> Void)?
+    var capsKeyIsRemapped = false
+    var preventAllCaps = true
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
 
@@ -125,9 +130,12 @@ final class DedicatedCapsLockFilter {
         }
 
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-        event.flags = DedicatedCapsLockEventPolicy.sanitizedFlags(event.flags)
+        if capsKeyIsRemapped, DedicatedCapsLockEventPolicy.shouldSuppressOwnedKey(eventType: type, keyCode: keyCode) {
+            return nil
+        }
+        if preventAllCaps { event.flags = DedicatedCapsLockEventPolicy.sanitizedFlags(event.flags) }
 
-        if DedicatedCapsLockEventPolicy.shouldSuppress(eventType: type, keyCode: keyCode) {
+        if preventAllCaps, DedicatedCapsLockEventPolicy.shouldSuppress(eventType: type, keyCode: keyCode) {
             // NSEvent monitors will not receive the event we swallow.
             onCapsLockChange?()
             return nil

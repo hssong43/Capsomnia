@@ -1,34 +1,38 @@
-# Caps Lock 한영 전환과 길게 눌러 ON/OFF
+# Caps Lock 짧은 한영 / 긴 잠자기 방지 전환
 
-## 목표와 설계
+## 목표와 범위
 
-Caps Lock을 짧게 누르면 한영만 전환하고 잠자기 방지 ON/OFF를 바꾸지 않는다. ON과 OFF 모두 실제 Caps Lock을 0.8초 이상 누른 입력으로 전환한다. 입력 이벤트를 소비하거나 재전송하지 않는다.
+MacBook Pro 내장 Caps Lock은 짧게 누르고 떼면 ABC와 한국어 두벌식만 전환한다. 0.8초 이상 누르면 잠자기 방지를 양방향으로 한 번 전환한다. 키를 뗀 뒤 불빛은 확인된 실제 잠자기 방지 상태와 일치해야 한다. 대문자 고정 기능은 사용하지 않는다.
 
-전원 요청 상태는 실제 SleepDisabled에서 초기화한다. 이후에는 길게 누르기 또는 메뉴·단축키·타이머·CLI의 명시적 요청으로만 갱신한다. 한영 전환 중 native Caps Lock이 ON/OFF로 흔들리거나 LED 쓰기 확인이 실패해도 전원 목표를 바꾸지 않는다. helper 성공과 실제 SleepDisabled 확인으로 전원 상태를 표시한다.
+| 입력 | 한영 | 잠자기 방지·불빛 |
+| --- | --- | --- |
+| 짧게 누름 | ABC ↔ 한국어 두벌식 | 상태 유지 |
+| 0.8초 이상 누름 | 유지 | ON ↔ OFF |
 
-키를 뗀 뒤 LED output element(usage page 8, Caps Lock usage 2)에 확인된 실제 전원 상태를 쓰고 출력 결과를 확인한다. 드라이버 캐시가 같아도 최초/키 release/입력 소스 변화 후 명시적으로 갱신한다. modifier와 output은 분리하며 오래된 출력 완료가 새 갱신 필요 상태를 지우지 않게 한다. 실패하면 최대 초당 한 번 재시도한다. 오래된 LED 쓰기 완료는 새 전원 목표를 덮어쓰지 않는다. CLI/자동 OFF의 오래된 완료도 명령 revision으로 거부하여 새 요청을 보존한다. 실제 전원 확인에 실패하면 LED 값을 추측해서 쓰지 않는다. 앱의 정상 종료/신호 종료 때 LED와 잠자기 방지를 OFF로 복원한다.
+대상은 hold controller, raw HID monitor, 입력 소스 전환, 전담 event tap, native key mapper, 앱 lifecycle, 실행·설치 스크립트와 해당 회귀 테스트다. helper 권한과 기존 타이머·단축키·CLI의 명시적 제어는 보존한다. 개인 fork의 같은 브랜치/PR에서 진행하며 merge는 별도 승인 후 수행한다.
 
-키 길이는 실제 IOHID timestamp와 동일한 monotonic clock으로 잰다. 기존 250ms polling을 재사용하며 한 번 누른 동안 최대 1회 전환한다. wake, 키보드 분리 또는 명시적 명령 후 오래된 누름을 취소한다. 입력 모니터링 권한이 필요하다.
+## 설계
 
-## 검증 순서
+1. 접근성·입력 모니터링·내장 키보드·ABC/한국어 입력 소스가 모두 준비된 경우에만 전담 매핑을 활성화한다. 내장 Caps 원래 매핑을 사용자 전용 0700 디렉터리/0600 파일에 먼저 동기화해 보관한 뒤 Caps→F18을 적용·검증한다. 다른 키의 매핑과 외장 키보드는 유지한다.
+2. F18 down/up은 event tap에서 소비한다. 실제 raw HID Caps press/release의 monotonic timestamp로 길이를 재고 short release만 TIS 입력 소스를 한 번 선택한다. hold는 기존 polling에서도 판정하며 한 번 누른 동안 최대 한 번 전환한다. 키보드 분리·wake·종료 때 오래된 누름을 취소한다.
+3. 전원 의도는 실제 SleepDisabled에서 초기화한다. native Caps modifier나 LED 값은 전원 명령으로 사용하지 않는다. helper 성공과 실제 상태 확인 뒤 LED output을 쓴다. 출력 실패를 숨기지 않고 재시도하며 오래된 LED/CLI/타이머 완료가 새 요청을 덮어쓰지 않는다.
+4. native uppercase modifier는 OFF로 유지한다. 보안 입력에서 modifier를 ON으로 복구해 불빛을 표현하는 기존 경로를 사용하지 않는다. F18은 실행 중 전담 키로 예약된다.
+5. 감독 실행기가 정상 종료·충돌·TERM 후 키 매핑을 복구한다. PID가 다른 새 소유자의 백업은 건드리지 않는다. 복구는 현재 Caps 매핑이 앱 소유 F18일 때만 수행하며 사용자가 새로 바꾼 Caps 및 다른 키 매핑을 보존한다. 복구 실패 시 백업과 복구 binary를 남긴다. 설치 시 복구를 확인한 뒤 앱을 교체한다.
+6. 모든 앱 실행 경로는 단일 인스턴스 lock을 사용한다. 정상 종료와 signal 종료 시에는 LED와 잠자기 방지도 OFF로 돌린다. crash 후 전원은 재실행 앱이 실제 상태에서 이어받는다.
 
-1. 짧은 OFF→native ON, 짧은 ON→native OFF, LED 쓰기 실패, native 흔들림, 양방향 0.8초/한 번만 실행, 중복 보고, 누락 release/명시적 취소, 지연 LED 완료, 보안 입력을 테스트로 재현한다.
-2. RED 확인 후 구현하고 전체 Swift suite, release 빌드, 연결된 코드의 독립 검토를 수행한다.
-3. 기존 앱/설정 백업과 helper/LaunchAgent를 유지하며 수정본을 교체한다. 권한·실제 전원과 LED 일치·짧은 한영/길게 ON/OFF를 사용자와 확인한다.
-4. 같은 브랜치와 개인 fork PR #1을 최종 구현/검증 중심으로 갱신한다. 승인 없이 merge하지 않는다.
+## 작업과 검증 순서
 
-## 확인된 증거와 한계
+1. short/long 분리, 지연 완료, 매핑 보존·rollback·PID·백업 권한, supervisor 종료 경로를 RED로 재현한다.
+2. 최소 구현 뒤 전체 Swift suite, shell 구문/lifecycle, release 빌드를 실행한다. 연결된 코드의 독립 검토에서 발견한 설치 백업 삭제·중복 실행·busy 중 짧은 입력 유실을 수정하고 재검증한다.
+3. 기존 앱·LaunchAgent·설정을 백업하고 helper와 설정을 보존한 채 수정본을 교체한다. 실제 mapping/권한/doctor와 정상·충돌 복구를 확인한다.
+4. 사용자가 실제 키보드에서 짧게 → 길게 → 짧게 → 길게를 눌러 한영과 불빛/잠자기 방지를 확인한다. 같은 개인 PR을 최종 구현/검증 중심으로 갱신한다.
 
-- 첫 OFF만 보호한 버전은 실제 사용자 시험에서 짧은 ON/전환 실패/LED 불일치가 재현되어 완료로 간주하지 않는다.
-- 새 양방향/LED 회귀 10개에서 RED assertion 21건을 확인했다. GREEN과 설치 결과는 실행 후 별도로 기록한다.
-- 기존 helper의 실제 상태 확인, drift 재검증, CLI 명시적 OFF의 sleep 검증을 보존한다.
-- Secure Event Input에서는 기존 modifier OFF 보호를 유지한다. LED output은 modifier를 바꾸지 않으므로 실제 전원 상태로 따로 표시한다. 실물 암호 입력 동작 검증은 별도로 구분한다.
-- 실제 키보드·한영 입력·wake·덮개 검증은 단위 테스트로 증명하지 못하며 확인 여부를 구분한다. 공식 업데이트로 개인 수정이 덮어써질 수 있다.
+## 검증 현황과 한계
 
-- 최종 자동 검증: `swift test` 203개, 실물 하드웨어 테스트 2개 skipped, 실패 0. 설치/사용자 실물 확인은 아직 대기.
-
-- 독립 검토의 helper 실패 시 LED 기준/오래된 CLI·자동 OFF 완료 경합 2건은 추가 회귀 RED(7개 assertion 실패) 후 GREEN으로 해결했다.
-
-- MacBook Pro 내장 키보드의 LED output 직접 OFF 시험은 사용자가 실제 꺼짐을 확인했다. 새 출력 경로 적용 후 전체 단/장 입력과 불빛은 재확인한다.
-
-- 직접 LED 강제 출력 실패가 캐시 일치로 숨지 않도록 current-generation 오류를 UI/doctor에 유지하는 회귀를 RED→GREEN으로 검증했다.
+- 통과: 최종 `swift test` 235건, 실패 0, 실물 hardware 2건 skipped. release 앱과 unsigned pkg 빌드, 추출된 runner/agent/postinstall, shell 구문, vendor snapshot, CI 변경 감지와 diff 검사를 확인했다.
+- 통과: mapping fake/temp-file 22건. 원래 매핑 보존, partial failure rollback, private backup, owner PID와 복구 재시도를 확인했다. x86_64 컴파일과 arm64 타입 검사를 수행했다.
+- 통과: fake supervisor 정상 종료·충돌·TERM·복구 실패 전달 4경로.
+- 통과: 실제 로컬 설치 후 두 권한 갱신, 전담 mapping/백업0700·0600, doctor healthy를 확인했다. 실제 TERM과 child SIGKILL에서 원래 매핑 복구·백업 제거를 확인했고, crash 뒤 LaunchAgent 자동 재시작과 새 owner PID를 확인했다.
+- 통과: 사용자 MacBook Pro에서 짧게→1초 길게→짧게→1초 길게를 실행해 short 한영만 전환 및 전원·물리 LED OFF→ON→ON→OFF가 모두 정상이라고 확인했다.
+- 미검증: Secure Event Input·wake·덮개와 실제 재로그인 경로. 로그인 자동 실행 설정과 현재 관리 실행은 확인했다.
+- 공식 upstream 업데이트는 개인 수정을 덮어쓸 수 있다. 상단 다운로드 링크의 공식 패키지에는 이 수정이 없다.

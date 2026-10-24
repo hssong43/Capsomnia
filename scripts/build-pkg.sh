@@ -79,7 +79,7 @@ fi
 
   <key>ProgramArguments</key>
   <array>
-    <string>/Applications/$APP_NAME.app/Contents/MacOS/$APP_NAME</string>
+    <string>/Applications/$APP_NAME.app/Contents/Resources/run-capsomnia.sh</string>
   </array>
 
   <key>RunAtLoad</key>
@@ -154,6 +154,8 @@ fi
 /bin/launchctl bootout "gui/$console_uid" "$SYSTEM_LAUNCH_AGENT" 2>/dev/null || true
 /bin/launchctl asuser "$console_uid" /usr/bin/sudo -u "$console_user" /usr/bin/pkill -x "$APP_NAME" 2>/dev/null || true
 /bin/sleep 1
+/bin/launchctl asuser "$console_uid" /usr/bin/sudo -H -u "$console_user" \
+  "/Applications/$APP_NAME.app/Contents/MacOS/$APP_NAME" --restore-native-caps-lock
 /usr/bin/sudo -u "$console_user" /usr/bin/defaults write "$LABEL" ForceWelcomeOnNextLaunch -bool true 2>/dev/null || true
 /bin/launchctl bootstrap "gui/$console_uid" "$SYSTEM_LAUNCH_AGENT" 2>/dev/null || true
 launch_at_login="$(/usr/bin/sudo -u "$console_user" /usr/bin/defaults read "$LABEL" LaunchAtLogin 2>/dev/null || true)"

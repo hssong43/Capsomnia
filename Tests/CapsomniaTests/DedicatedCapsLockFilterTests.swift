@@ -33,4 +33,14 @@ final class DedicatedCapsLockFilterTests: XCTestCase {
         XCTAssertNotNil(filter.handle(type: .keyDown, event: event))
         XCTAssertEqual(notifications, 0)
     }
+    func testOwnedF18DownAndUpAreConsumedWithoutASecondCapsAction() throws {
+        let filter = DedicatedCapsLockFilter()
+        filter.capsKeyIsRemapped = true
+        var nativeCapsChanges = 0
+        filter.onCapsLockChange = { nativeCapsChanges += 1 }
+        let event = try XCTUnwrap(CGEvent(keyboardEventSource: nil, virtualKey: 79, keyDown: true))
+        XCTAssertNil(filter.handle(type: .keyDown, event: event))
+        XCTAssertNil(filter.handle(type: .keyUp, event: event))
+        XCTAssertEqual(nativeCapsChanges, 0)
+    }
 }

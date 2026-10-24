@@ -41,6 +41,9 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var hasLoggedMissingDisplayState = false
     private var hasLoggedMissingSleepState = false
     private var dedicatedModeError = false
+    private let nativeCapsKeyMapping = NativeCapsKeyMapping()
+    private var nativeCapsMappingError = true
+    private var nextNativeCapsMappingCheckAt = Date.distantPast
     private var shouldRestoreSleepOnTerminate = true
     private var pollingTimer: Timer?
     private var pendingAutoOffPreferenceApplyWorkItem: DispatchWorkItem?
@@ -78,6 +81,16 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 guard let self, self.capsLockHold.requestRevision == revision else { return }
                 self.log("capslock_hold elapsed_ms=\(Int((self.capsLockHold.lastHoldDuration ?? 0) * 1000)) target=\(target)")
                 self.requestCapsLockState(target, source: "capslock_hold", preserveHold: true)
+            }
+        },
+        onShortPress: { [weak self] in
+            guard let self, self.nativeCapsKeyMapping.isActive else { return }
+            if let source = KeyboardInputSourceSwitcher.toggle() {
+                self.log("capslock_short input_source=\(source)")
+            } else {
+                self.nativeCapsMappingError = true
+                self.restoreNativeCapsMapping(reason: "input_source_unavailable")
+                self.log("capslock_short input_source_switch_failed")
             }
         },
         setLED: { [weak self] target, completion in
@@ -124,6 +137,10 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if terminateIfNewerInteractiveDuplicate() {
             return
         }
+
+        // Recover an interrupted earlier run before taking ownership again.
+        dedicatedCapsLockFilter.capsKeyIsRemapped = true
+        restoreNativeCapsMapping(reason: "startup")
 
         restoreSavedDisplayBrightnessIfNeeded(reason: "startup")
         Preferences.registerDefaults()
@@ -186,6 +203,7 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
         controlServer?.stop()
         capsLockHold.cancelPress()
         if shouldRestoreSleepOnTerminate {
+            restoreNativeCapsMapping(reason: "terminate")
             let modifierResult = SystemCapsLockController.set(false)
             let ledResult = hidCapsLockMonitor.setCapsLockLED(false)
             log("terminate modifier_off=\(modifierResult) led_off=\(ledResult)")
@@ -294,8 +312,10 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.capsLockHold.cancelPress()
+            self.restoreNativeCapsMapping(reason: "wake")
             self.hidCapsLockMonitor.stop()
             self.nextHIDCapsLockMonitorCheckAt = .distantPast
+            self.nextNativeCapsMappingCheckAt = .distantPast
             self.ensureHIDCapsLockMonitor()
             self.applyCurrentCapsLockState(reason: "wake")
         }
@@ -320,7 +340,7 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func handleHIDCapsLockChange() {
         let pressed = hidCapsLockMonitor.isPressed
         log("capslock_hid \(pressed ? "pressed" : "released") uptime=\(hidCapsLockMonitor.lastEventTime)")
-        guard !isAutoOffInProgress, !isControlMutationInFlight else {
+        guard nativeCapsKeyMapping.isActive else {
             capsLockHold.cancelPress()
             return
         }
@@ -651,9 +671,7 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
         nextDedicatedModeRetryAt = .distantPast
 
         if !enabled {
-            dedicatedCapsLockFilter.stop()
             secureInputFocusMonitor.stop()
-            dedicatedModeError = false
         }
 
         let ready = ensureDedicatedCapsLockFilter(
@@ -936,8 +954,11 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func applyCurrentCapsLockState(reason: String) {
         ensureHIDCapsLockMonitor()
         guard !isAutoOffToggleInFlight, !isControlMutationInFlight else { return }
-        capsLockHold.poll(pressed: hidCapsLockMonitor.isPressed, now: HIDCapsLockMonitor.uptime)
         _ = ensureDedicatedCapsLockFilter(promptForPermission: false, reason: reason)
+        ensureNativeCapsMapping(reason: reason)
+        if nativeCapsKeyMapping.isActive {
+            capsLockHold.poll(pressed: hidCapsLockMonitor.isPressed, now: HIDCapsLockMonitor.uptime)
+        }
         let requested = capsLockHold.requestedAwake
         if evaluateAutoOff(capsLockOn: requested, reason: reason) { return }
         apply(capsLockOn: requested, reason: reason)
@@ -955,14 +976,9 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
         promptForPermission: Bool,
         reason: String
     ) -> Bool {
-        guard Preferences.dedicatedCapsLockMode else {
-            if dedicatedCapsLockFilter.state != .inactive {
-                dedicatedCapsLockFilter.stop()
-            }
-            dedicatedModeError = false
-            nextDedicatedModeRetryAt = .distantPast
-            return true
-        }
+        // The owned F18 route always needs a tap, independently of the optional
+        // all-caps sanitizer for other keys/keyboards.
+        dedicatedCapsLockFilter.preventAllCaps = Preferences.dedicatedCapsLockMode
 
         if dedicatedCapsLockFilter.isActive {
             secureInputFocusMonitor.start()
@@ -992,8 +1008,54 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return isReady
     }
 
+    private func ensureNativeCapsMapping(reason: String) {
+        guard hidCapsLockMonitor.isActive, dedicatedCapsLockFilter.isActive else {
+            nativeCapsMappingError = true
+            if dedicatedCapsLockFilter.capsKeyIsRemapped { restoreNativeCapsMapping(reason: reason) }
+            return
+        }
+        let now = Date()
+        guard now >= nextNativeCapsMappingCheckAt else { return }
+        nextNativeCapsMappingCheckAt = now.addingTimeInterval(helperRetryInterval)
+        guard KeyboardInputSourceSwitcher.isAvailable else {
+            nativeCapsMappingError = true
+            restoreNativeCapsMapping(reason: "input_source_unavailable")
+            return
+        }
+        guard !nativeCapsKeyMapping.isActive else { return }
+        dedicatedCapsLockFilter.capsKeyIsRemapped = true
+        do {
+            try nativeCapsKeyMapping.activate()
+            nativeCapsMappingError = false
+            capsLockHold.cancelPress()
+            capsLockHold.invalidateLED()
+            let result = SystemCapsLockController.set(false)
+            secureInputCapsLockOverrideActive = false
+            Preferences.secureInputCapsLockOverrideActive = false
+            log("\(reason) native_caps_mapping=active modifier_off=\(result)")
+        } catch {
+            nativeCapsMappingError = true
+            log("\(reason) native_caps_mapping_failed error=\(error.localizedDescription)")
+            restoreNativeCapsMapping(reason: "activation_failed")
+        }
+    }
+
+    private func restoreNativeCapsMapping(reason: String) {
+        capsLockHold.cancelPress()
+        do {
+            try nativeCapsKeyMapping.restore()
+            dedicatedCapsLockFilter.capsKeyIsRemapped = false
+        } catch {
+            // A partial activation may still own Caps. Keep swallowing its F18
+            // route until recovery succeeds; the durable backup is preserved.
+            dedicatedCapsLockFilter.capsKeyIsRemapped = true
+            nativeCapsMappingError = true
+            log("\(reason) native_caps_restore_failed error=\(error.localizedDescription)")
+        }
+    }
+
     private func prepareSecureInputOverrideForExplicitTarget(_ target: Bool, preserveHold: Bool = false) {
-        if !preserveHold { capsLockHold.cancelPress() }
+        if !preserveHold { capsLockHold.cancelHold() }
         if target {
             secureInputOverrideSuppressedForExplicitOff = false
             return
@@ -1012,6 +1074,17 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
         physicalCapsLockOn: Bool,
         reason: String
     ) -> Bool {
+        if nativeCapsKeyMapping.isActive {
+            // The keyboard lamp is an output only. Never restore the uppercase
+            // modifier to represent awake mode, including after secure input.
+            secureInputCapsLockOverrideActive = false
+            Preferences.secureInputCapsLockOverrideActive = false
+            if physicalCapsLockOn {
+                _ = SystemCapsLockController.set(false)
+                capsLockHold.invalidateLED()
+            }
+            return false
+        }
         let snapshot = SecureInputStateReader.snapshot()
         let logicalCapsomniaActive = lastAppliedState == true
             && !secureInputOverrideSuppressedForExplicitOff
@@ -1389,7 +1462,7 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let ledMismatch = !hidCapsLockMonitor.isPressed && physical != ledTarget
         settingsHeaderStatus = SettingsHeaderStatus.resolve(
             confirmed: lastConfirmedSleepState,
-            hasError: dedicatedModeError || !hidCapsLockMonitor.isActive || failedSleepState != nil
+            hasError: nativeCapsMappingError || dedicatedModeError || !hidCapsLockMonitor.isActive || failedSleepState != nil
                 || ledMismatch || capsLockHold.ledWriteFailed,
             changing: isControlMutationInFlight || isAutoOffToggleInFlight,
             previous: settingsHeaderStatus
@@ -1410,7 +1483,7 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let ledTarget = lastConfirmedSleepState
         let ledReady = !capsLockHold.ledWriteFailed
             && (hidCapsLockMonitor.isPressed || hidCapsLockMonitor.capsLockLEDReportedState == ledTarget)
-        if failedSleepState == nil, !dedicatedModeError, hidCapsLockMonitor.isActive, ledReady {
+        if failedSleepState == nil, !nativeCapsMappingError, !dedicatedModeError, hidCapsLockMonitor.isActive, ledReady {
             updateStatus(capsLockOn: capsLockOn)
         } else {
             updateStatusError()
@@ -1441,6 +1514,7 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
         for signalNumber in [SIGINT, SIGTERM] {
             let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .main)
             source.setEventHandler { [weak self] in
+                self?.restoreNativeCapsMapping(reason: "signal")
                 self?.dedicatedCapsLockFilter.stop()
                 self?.secureInputFocusMonitor.stop()
                 Preferences.secureInputCapsLockOverrideActive = false
@@ -1618,7 +1692,10 @@ extension Capsomnia {
         return .object([
             "app_running": .bool(true),
             "app_version": .string(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "development"),
-            "caps_lock_hold_ready": .bool(hidCapsLockMonitor.isActive),
+            "caps_lock_hold_ready": .bool(hidCapsLockMonitor.isActive && nativeCapsKeyMapping.isActive),
+            "native_caps_mapping_active": .bool(nativeCapsKeyMapping.isActive),
+            "native_caps_mapping_error": .bool(nativeCapsMappingError),
+            "caps_lock_short_action": .string("input_source_only"),
             "caps_lock_off_hold_seconds": .number(CapsLockHoldController.minimumDuration),
             "app_path": .string(Bundle.main.bundlePath),
             "caps_lock": .bool(currentCapsLockState),
@@ -1737,6 +1814,9 @@ extension Capsomnia {
             issues.append(.string("Caps Lock LED is not synchronized with awake mode."))
         }
         if capsLockHold.ledWriteFailed { issues.append(.string("Caps Lock LED output failed. Retrying the hardware report.")) }
+        if nativeCapsMappingError || !nativeCapsKeyMapping.isActive {
+            issues.append(.string("Dedicated Caps input is unavailable. Check Accessibility, Input Monitoring, and enabled ABC/Korean input sources."))
+        }
         if dedicatedModeError { issues.append(.string("Capitalization prevention is unavailable. Check Accessibility permission.")) }
         if !hidCapsLockMonitor.isActive {
             issues.append(.string("Long-press detection is unavailable. Check Input Monitoring permission and keyboard connection."))

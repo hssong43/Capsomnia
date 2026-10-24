@@ -30,8 +30,8 @@ struct HIDCapsLockPressTracker {
     }
 }
 
-/// Optional, non-exclusive observation of Caps Lock key input. It never writes
-/// keyboard state or consumes an event. Long-press timing needs Input Monitoring.
+/// Observes physical Caps input and writes its LED on the MacBook keyboard.
+/// Raw long-press timing needs Input Monitoring; events are never consumed here.
 final class HIDCapsLockMonitor {
     private static let secondsPerTick: Double = {
         var timebase = mach_timebase_info_data_t()
@@ -55,7 +55,7 @@ final class HIDCapsLockMonitor {
 
     private var capsLockLEDOutputs: [IOHIDElement] {
         guard let manager, let keyboards = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> else { return [] }
-        return keyboards.flatMap { device in
+        return keyboards.filter(Self.isInternalKeyboard).flatMap { device in
             let matching = [kIOHIDElementUsagePageKey: 8, kIOHIDElementUsageKey: 2] as CFDictionary
             let elements = IOHIDDeviceCopyMatchingElements(device, matching, 0) as? [IOHIDElement] ?? []
             return elements.filter { IOHIDElementGetType($0) == kIOHIDElementTypeOutput }
@@ -67,12 +67,14 @@ final class HIDCapsLockMonitor {
         guard !elements.isEmpty else { return nil }
         var states: Set<Bool> = []
         for element in elements {
-            let placeholder = IOHIDValueCreateWithIntegerValue(kCFAllocatorDefault, element, 0, 0)
-            var value = Unmanaged.passUnretained(placeholder)
-            guard IOHIDDeviceGetValue(IOHIDElementGetDevice(element), element, &value) == kIOReturnSuccess else {
+            let reported: Bool? = withUnsafeTemporaryAllocation(of: Unmanaged<IOHIDValue>.self, capacity: 1) { value in
+                guard IOHIDDeviceGetValue(IOHIDElementGetDevice(element), element, value.baseAddress!) == kIOReturnSuccess else { return nil }
+                return IOHIDValueGetIntegerValue(value[0].takeUnretainedValue()) != 0
+            }
+            guard let reported else {
                 return nil
             }
-            states.insert(IOHIDValueGetIntegerValue(value.takeUnretainedValue()) != 0)
+            states.insert(reported)
         }
         return states.count == 1 ? states.first : nil
     }
@@ -161,7 +163,7 @@ final class HIDCapsLockMonitor {
     }
 
     private func addDevice(_ device: IOHIDDevice) {
-        guard let id = Self.deviceID(device),
+        guard Self.isInternalKeyboard(device), let id = Self.deviceID(device),
               let elements = IOHIDDeviceCopyMatchingElements(device, [
                 kIOHIDElementUsagePageKey: 0x07,
                 kIOHIDElementUsageKey: 0x39
@@ -173,7 +175,7 @@ final class HIDCapsLockMonitor {
     private func handle(_ value: IOHIDValue) {
         let element = IOHIDValueGetElement(value)
         let device = IOHIDElementGetDevice(element)
-        guard let id = Self.deviceID(device) else { return }
+        guard let id = Self.deviceID(device), devices.contains(id) else { return }
         if tracker.handle(
             deviceID: id,
             usagePage: IOHIDElementGetUsagePage(element),
@@ -192,5 +194,10 @@ final class HIDCapsLockMonitor {
             return nil
         }
         return id
+    }
+
+    private static func isInternalKeyboard(_ device: IOHIDDevice) -> Bool {
+        (IOHIDDeviceGetProperty(device, kIOHIDProductKey as CFString) as? String)?
+            .hasPrefix("Apple Internal Keyboard") == true
     }
 }

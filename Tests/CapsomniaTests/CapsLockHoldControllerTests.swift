@@ -231,4 +231,37 @@ final class CapsLockHoldControllerTests: XCTestCase {
         XCTAssertEqual(attempts, 2)
         XCTAssertFalse(controller.ledWriteFailed)
     }
+    func testExplicitPowerChangePreservesShortLanguagePressButCancelsLongPowerPress() {
+        var shortCount = 0
+        var requests: [Bool] = []
+        let controller = CapsLockHoldController(initialAwake: false, onRequest: { requests.append($0) },
+                                                onShortPress: { shortCount += 1 }, setLED: { _, _ in })
+        controller.handle(pressed: true, now: 1)
+        controller.setRequested(true)
+        controller.handle(pressed: false, now: 1.1)
+        XCTAssertEqual(shortCount, 1)
+        controller.handle(pressed: true, now: 2)
+        controller.setRequested(false)
+        controller.handle(pressed: false, now: 3)
+        XCTAssertEqual(shortCount, 1)
+        XCTAssertEqual(requests, [])
+        XCTAssertFalse(controller.requestedAwake)
+    }
+
+    func testOnlyAShortReleaseSwitchesLanguageOnce() {
+        var languageSwitches = 0
+        var powerRequests: [Bool] = []
+        let controller = CapsLockHoldController(initialAwake: false, onRequest: { powerRequests.append($0) },
+                                                onShortPress: { languageSwitches += 1 }) { _, _ in }
+        controller.handle(pressed: true, now: 0)
+        controller.handle(pressed: false, now: 0.1)
+        controller.handle(pressed: false, now: 0.2)
+        XCTAssertEqual(languageSwitches, 1)
+        XCTAssertEqual(powerRequests, [])
+        controller.handle(pressed: true, now: 1)
+        controller.poll(pressed: true, now: 1.8)
+        controller.handle(pressed: false, now: 2)
+        XCTAssertEqual(languageSwitches, 1)
+        XCTAssertEqual(powerRequests, [true])
+    }
 }
