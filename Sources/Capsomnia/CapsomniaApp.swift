@@ -73,8 +73,9 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private lazy var capsLockHold: CapsLockHoldController = CapsLockHoldController(
         initialAwake: SleepStateReader.isDisabled() ?? false,
         onRequest: { [weak self] target in
+            let revision = self?.capsLockHold.requestRevision
             DispatchQueue.main.async {
-                guard let self, self.capsLockHold.requestedAwake == target else { return }
+                guard let self, self.capsLockHold.requestRevision == revision else { return }
                 self.log("capslock_hold elapsed_ms=\(Int((self.capsLockHold.lastHoldDuration ?? 0) * 1000)) target=\(target)")
                 self.requestCapsLockState(target, source: "capslock_hold", preserveHold: true)
             }
@@ -767,6 +768,7 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func fireAutoOff(reason: String) {
         guard !isAutoOffToggleInFlight else { return }
+        let revision = capsLockHold.requestRevision
         isAutoOffToggleInFlight = true
         prepareSecureInputOverrideForExplicitTarget(false)
 
@@ -774,8 +776,11 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
         capsLockToggleCoordinator.requestSet(false) { [weak self] result in
             guard let self else { return }
             self.isAutoOffToggleInFlight = false
-            if result == .changed(to: false) { self.capsLockHold.setRequested(false) }
-            self.autoOffSleepCoordinator.recordCapsLockResult(result)
+            if result == .changed(to: false), self.capsLockHold.completeRequest(false, revision: revision) {
+                self.autoOffSleepCoordinator.recordCapsLockResult(result)
+            } else {
+                self.autoOffSleepCoordinator.recordCapsLockResult(.writeFailed(target: false))
+            }
             self.handleCapsLockToggleResult(result, source: "auto_off")
             self.applyCurrentCapsLockState(reason: "auto_off")
         }
@@ -935,7 +940,7 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
             _ = syncSecureInputCapsLockOverride(physicalCapsLockOn: physical, reason: reason)
         }
         capsLockHold.synchronizeLED(
-            physical: capsLockStateReader.currentState(), pressed: hidCapsLockMonitor.isPressed,
+            physical: capsLockStateReader.currentState(), confirmedAwake: lastConfirmedSleepState, pressed: hidCapsLockMonitor.isPressed,
             secureOverride: secureInputCapsLockOverrideActive, now: HIDCapsLockMonitor.uptime
         )
         refreshStatus(capsLockOn: lastConfirmedSleepState ?? requested)
@@ -1258,6 +1263,7 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func markSleepStateFailed(_ capsLockOn: Bool, at now: Date, resetVerification: Bool = true) {
+        lastConfirmedSleepState = SleepStateReader.isDisabled()
         failedSleepState = capsLockOn
         nextSleepStateRetryAt = now.addingTimeInterval(helperRetryInterval)
         if resetVerification {
@@ -1374,7 +1380,7 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func refreshSettingsHeaderStatus() {
         let physical = capsLockStateReader.currentState()
-        let ledTarget = secureInputCapsLockOverrideActive ? false : currentCapsLockState
+        let ledTarget = secureInputCapsLockOverrideActive ? false : lastConfirmedSleepState
         let ledMismatch = !hidCapsLockMonitor.isPressed && physical != ledTarget
         settingsHeaderStatus = SettingsHeaderStatus.resolve(
             confirmed: lastConfirmedSleepState,
@@ -1395,7 +1401,7 @@ final class Capsomnia: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func refreshStatus(capsLockOn: Bool) {
-        let ledTarget = secureInputCapsLockOverrideActive ? false : currentCapsLockState
+        let ledTarget = secureInputCapsLockOverrideActive ? false : lastConfirmedSleepState
         let ledReady = hidCapsLockMonitor.isPressed || capsLockStateReader.currentState() == ledTarget
         if failedSleepState == nil, !dedicatedModeError, hidCapsLockMonitor.isActive, ledReady {
             updateStatus(capsLockOn: capsLockOn)
@@ -1554,6 +1560,7 @@ extension Capsomnia {
         timerSeconds: TimeInterval? = nil,
         reply: @escaping (ControlResponse) -> Void
     ) {
+        let revision = capsLockHold.requestRevision
         if target {
             _ = ensureDedicatedCapsLockFilter(promptForPermission: false, reason: "cli")
         }
@@ -1567,7 +1574,7 @@ extension Capsomnia {
             },
             synchronize: { value in
 
-                self.capsLockHold.setRequested(value)
+                guard self.capsLockHold.completeRequest(value, revision: revision) else { return false }
                 if let timerSeconds {
                     self.sessionTimer.set(seconds: timerSeconds, now: Date())
                 }
@@ -1583,6 +1590,7 @@ extension Capsomnia {
             sleep: { SystemSleepRequester.request() },
             completion: { result in
                 self.isControlMutationInFlight = false
+                self.applyCurrentCapsLockState(reason: "cli_complete")
                 self.refreshSettingsHeaderStatus()
                 self.updateStatusMenuControls()
                 self.settingsWindowController?.reloadText()
@@ -1714,7 +1722,7 @@ extension Capsomnia {
         if let sleepDisabled, sleepDisabled != currentCapsLockState {
             issues.append(.string("Requested awake mode and actual sleep prevention are not synchronized."))
         }
-        if !hidCapsLockMonitor.isPressed, capsLock != (secureInputCapsLockOverrideActive ? false : currentCapsLockState) {
+        if !hidCapsLockMonitor.isPressed, capsLock != (secureInputCapsLockOverrideActive ? false : sleepDisabled) {
             issues.append(.string("Caps Lock LED is not synchronized with awake mode."))
         }
         if dedicatedModeError { issues.append(.string("Capitalization prevention is unavailable. Check Accessibility permission.")) }
