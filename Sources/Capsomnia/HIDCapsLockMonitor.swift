@@ -31,7 +31,7 @@ struct HIDCapsLockPressTracker {
 }
 
 /// Optional, non-exclusive observation of Caps Lock key input. It never writes
-/// keyboard state or consumes an event, and does not request permission.
+/// keyboard state or consumes an event. Long-press timing needs Input Monitoring.
 final class HIDCapsLockMonitor {
     enum State {
         case inactive, active, permissionRequired, unavailable
@@ -49,8 +49,9 @@ final class HIDCapsLockMonitor {
     deinit { stop() }
 
     @discardableResult
-    func start() -> State {
-        guard CGPreflightListenEventAccess() else {
+    func start(promptForPermission: Bool = false) -> State {
+        guard CGPreflightListenEventAccess()
+                || (promptForPermission && CGRequestListenEventAccess()) else {
             stop()
             state = .permissionRequired
             return state
