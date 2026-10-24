@@ -194,7 +194,9 @@ private final class NativeCapsMappingHIDBackend: NativeCapsMappingBackend {
     private var handles: [UInt64: IOHIDServiceClient] = [:]
 
     func services() throws -> [NativeCapsKeyMapping.Service] {
-        if client == nil { client = IOHIDEventSystemClientCreateSimpleClient(kCFAllocatorDefault) }
+        // A client retained across sleep can keep services that reject all writes.
+        handles.removeAll()
+        client = IOHIDEventSystemClientCreateSimpleClient(kCFAllocatorDefault)
         guard let client, let services = IOHIDEventSystemClientCopyServices(client) as? [IOHIDServiceClient] else {
             throw NativeCapsKeyMapping.Failure.unsupportedService
         }

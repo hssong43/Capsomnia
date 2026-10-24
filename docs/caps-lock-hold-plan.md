@@ -29,10 +29,17 @@ MacBook Pro 내장 Caps Lock은 짧게 누르고 떼면 ABC와 한국어 두벌�
 
 ## 검증 현황과 한계
 
+### 실제 잠자기 복귀 회귀 수정
+
+실제 잠자기 후 기존 IOHID event-system client가 키 매핑 쓰기를 계속 거부해 전담 입력이 중단됐다. 같은 앱 재시작은 즉시 복구돼 권한 문제가 아닌 오래된 연결 문제로 좁혔다. 서비스 열거 시 client와 handle을 새로 만들어 복구·활성화가 현재 키보드 연결을 사용하게 한다. 백업·rollback 및 다른 키 매핑 보존은 유지한다.
+
+작업 순서는 실물 실패 기록 → 최소 연결 수정 → 전체 Swift 검사와 release 빌드 → 기존 앱 폴더에 적용 → 실제 잠자기 및 사용자 단/장 입력 재검증이다. 수용 기준은 같은 프로세스의 wake 후 doctor healthy·매핑 active, 짧게 한영만 전환, 길게 잠자기 방지와 키를 뗀 뒤 LED 유지다. 하드웨어 연결 단절은 fake backend 테스트로 증명할 수 없으므로 실제 재시험 결과를 별도로 기록한다. 실제 재시험에서 Sleep Count가 1→2로 증가하고 같은 PID가 유지됐다. wake 후 매핑·hold 준비·doctor 정상, 사용자도 short/long 및 키를 뗀 뒤 물리 LED가 모두 정상이라고 확인했다. 잠자기 방지를 초기 ON으로 복원했고 실제 상태·LED 보고·display-awake assertion을 재확인했다.
+
 - 통과: 최종 `swift test` 235건, 실패 0, 실물 hardware 2건 skipped. release 앱과 unsigned pkg 빌드, 추출된 runner/agent/postinstall, shell 구문, vendor snapshot, CI 변경 감지와 diff 검사를 확인했다.
 - 통과: mapping fake/temp-file 22건. 원래 매핑 보존, partial failure rollback, private backup, owner PID와 복구 재시도를 확인했다. x86_64 컴파일과 arm64 타입 검사를 수행했다.
 - 통과: fake supervisor 정상 종료·충돌·TERM·복구 실패 전달 4경로.
 - 통과: 실제 로컬 설치 후 두 권한 갱신, 전담 mapping/백업0700·0600, doctor healthy를 확인했다. 실제 TERM과 child SIGKILL에서 원래 매핑 복구·백업 제거를 확인했고, crash 뒤 LaunchAgent 자동 재시작과 새 owner PID를 확인했다.
 - 통과: 사용자 MacBook Pro에서 짧게→1초 길게→짧게→1초 길게를 실행해 short 한영만 전환 및 전원·물리 LED OFF→ON→ON→OFF가 모두 정상이라고 확인했다.
-- 미검증: Secure Event Input·wake·덮개와 실제 재로그인 경로. 로그인 자동 실행 설정과 현재 관리 실행은 확인했다.
+- 통과: 실제 잠자기 복귀 후 같은 프로세스에서 매핑·단/장 입력·물리 LED 유지. Capsomnia ON 및 keep-display-awake ON, lock-on-lid-open OFF에서 덮개를 닫았다 열어 잠금 없이 복귀함을 사용자 확인했다. 이 설정은 Capsomnia ON 동안 적용되며 OS 전체 암호 요구 정책을 바꾸지 않는다.
+- 미검증: Secure Event Input 전체 동작과 실제 재로그인 경로. 로그인 자동 실행 설정과 현재 관리 실행은 확인했다.
 - 공식 upstream 업데이트는 개인 수정을 덮어쓸 수 있다. 상단 다운로드 링크의 공식 패키지에는 이 수정이 없다.
